@@ -1,0 +1,69 @@
+This is a mirror of http://www.vim.org/scripts/script.php?script_id=1473
+
+(This shell script works on Linux, Solaris, Unix, OSX, Cygwin. Not for VisualStudio.)
+Download this script, vim7-install.sh, into any directory and invoke:
+        sh ./vim7-install.sh
+
+This will download vim7 sources, then build and install vim7. 
+- You do not need root privileges. If you do not have root privileges, it will install under your $HOME ($HOME/bin). If you do have root privileges, it will install system-wide (/usr/local/bin. You can change this with --prefix option).
+- No arguments are needed (but you can add any configure-style arguments, see below). 
+- The latest vim7 sources are downloaded either from svn repository, or from cvs repository, up to the latest today's patch. The freshest runtime files are downloaded from rsync repository.
+
+Prerequisites: requires either svn client or cvs client installed. Requires C compiler (gcc). On debian or ubuntu, install build prerequisite packages with this command: apt-get build-dep vim-gtk vim-full
+
+By default, Vim will be built with '--with-features=huge'. But you can override this with commandline arguments, see below. 
+
+In case of  $HOME/bin install, script will prompt you to add $HOME/bin to your PATH.
+
+Non-root installation vs Root installation
+-------------------------------------------------------
+If you are invoking the script as root, vim will be installed into /usr/local (that is , for everybody). If you are non-root, then you will be prompted for one of two choices: (1) to install vim under your $HOME (for which you do not need root password), or (2) to install vim under /usr/local, for which you need to know root password.
+
+In case of $HOME/bin install, script will prompt you to add $HOME/bin to your PATH.
+
+Custom build options
+------------------------------
+All arguments beginning with '--' will be passed to 'configure'. Options beginning with single minus are for vim7-install.sh itself:
+   sh vim7-install.sh  -h           prints options of vim7-install.sh itself
+   sh vim7-install.sh  --help     prints options of vim's 'configure', and options of vim7-install.sh
+
+Without arguments, vim will be built with '--with-features=huge', unless you pass some other '--with-features='  argument. The '--with-features=huge' enables "almost all features" (including GUI ), but does not include "interpreters" (perl, python, ruby, etc).
+
+To include interpreters, add following options:
+      ./vim7-install.sh --enable-perlinterp --enable-pythoninterp --enable-rubyinterp
+
+Choice of download methods: Svn-export, Svn-checkout, CVS
+----------------------------------------------------------------------
+Default download method is Svn-export (thus you need svn client software). Other
+download methods are CVS (option -cvs), and Svn-checkout (-cvscheckout).
+As of 2006, CVS server is less reliable than SVN server; but CVS server gets patches first. SVN server lags behind CVS by several hours. Overall, SVN server is better choice since it is more reliable.
+Svn is noticeably faster than svn-checkout in one run, but svn-checkout is faster
+if you do multiple builds.
+
+Source cache, automatic cleanup, manual cleanup
+-------------------------------------------------------------------------
+- vim7-install.sh downloads only "delta";  that is, changed files that changed since last build. Thus the non-first build is *much* faster than the first build. Your fist build must download the whole source tree, of course.
+
+- each build is automatically preceded by 'make distclean'. This is non-optional.
+
+- script will checks for locally modified source files. If script finds locally modified source files, you will be prompted (whether to (1) drop local changes, or (2) to preserve local changes).
+
+-  if local source tree becomes corrupted and unusable, you need to clean it:
+         ./vim7_install.sh clean
+
+Q: Do I need to uninstall vim6 before using vim7-install.sh ?
+------------------------------------------------------------------------------------
+A: No. I recommend that you do not uninstall vim6 before 
+using vim7-install.sh. But I do recommend that you rename 
+vim6 before using vim7-install.sh, as follows:
+      become root
+      mv /usr/bin/vim /usr/bin/vim6
+
+Possible future enhancements: 
+  - easy inclusion of external patches 
+  - rsync download method.
+
+Bug reports and feedback
+-------------------------------------
+Send to:   iler.ml at gmail.com
+Please let me know if it works on other Unix flavor other than mentioned in the first line. Or doesn't work.
