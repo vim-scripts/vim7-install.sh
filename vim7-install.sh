@@ -3,7 +3,7 @@
 # Name:        vim7-install.sh
 # Summary:     script to install Vim7 from sources.
 # Author:      Yakov Lerner
-# Date:        2007-05-10
+# Date:        2008-02-20
 # Url:         http://www.vim.org/scripts/script.php?script_id=1473
 
 
@@ -27,7 +27,11 @@ Options:
     -noupdate    skip the source download/update phase
     -noinstall   skip the instllation phase
     -home        install under $HOME/bin
-    -glob        install into /usr/local  (user must be root or know root password)
+    -global,-glob    install into /usr/local  (user must be root or know root password)
+    -cache DIR   alt. cache dir (defautl is /var/tmp/user$UID
+    $VARTMP      base directory for checkout and build. Default is /var/tmp
+                 Sources will be in $VARTMP/user$UID/vim7_from_svn/vim7
+    -nort        skip downloading of runtime file from rsync server
 ';
 
 
@@ -38,6 +42,10 @@ prog=`basename $0`
 # before 2007-05-09, SVN_URL was https://svn.sourceforge.net/svnroot/vim/vim7
 # after  2007-05-09, SVN_URL is  https://vim.svn.sourceforge.net/svnroot/vim/branches/vim7.1 
 SVN_URL='https://vim.svn.sourceforge.net/svnroot/vim/branches/vim7.1'
+uid=`id|awk -F'[()=]' '{ print $2}'`
+CACHE_BASE=${VARTMP:-/var/tmp}/user$uid
+RUNTIMES_RSYNC_URL="rsync://ftp.vim.org/Vim/runtime"
+# rsync --exclude=dos -n -avz -c rsync://ftp.vim.org/Vim/runtime/. runtime
 
 
 die() { echo 1>&2 "$*"; exit 100; }
@@ -47,15 +55,14 @@ dieUsage() { echo "${USAGE?}"; exit 100; }
 
 
 ASSIGN_DIR() { # -> $DIR, $SRCTOP, $VIMSRC
-    # DIR=/var/tmp/user$uid/`basename $ZIP .zip`.src
     case "$DOWNLOAD_METHOD" in 
     "cvs")
-        DIR=/var/tmp/user$uid/vim7_from_cvs
+        DIR=$CACHE_BASE/vim7_from_cvs
         SRCTOP=$DIR/vim7    # $SRCTOP is used by patching
         VIMSRC=$SRCTOP/src  # $VIMSRC is used by patching
       ;;
     "svn")
-        DIR=/var/tmp/user$uid/vim7_from_svn
+        DIR=$CACHE_BASE/vim7_from_svn
         SRCTOP=$DIR/vim7    # $SRCTOP is used by patching
         VIMSRC=$SRCTOP/src  # $VIMSRC is used by patching
      ;;
@@ -83,7 +90,6 @@ CLEAN_ALL() {
     done
 }
 
-
 CONFIG_HELP() {
     echo '------------------------------------------------------------'
     echo `basename $0` help:
@@ -108,19 +114,6 @@ CONFIG_HELP() {
     exit
 }
 
-DOWNLOAD() {
-    case "$DOWNLOAD_METHOD" in
-    "cvs")
-        DO_CVS
-    ;;
-    "svn")
-        DO_SVN
-    ;;
-    *)
-        die "Error, unknown download method ($1), must be 'svn' or 'cvs'"
-    esac
-}
-
 DO_CVS() {
     type cvs >/dev/null 2>&1 || { \
         die "ERROR: 'cvs' utility is not installed. Please install and retry";
@@ -139,6 +132,31 @@ DO_CVS() {
         echo "CVS returned error(s). Press Enter to continue, Ctrl-C to stop"
         read ANSWER
     fi
+
+    DOWNLOAD_RUNTIME_FILES
+}
+
+DOWNLOAD_RUNTIME_FILES() { # $DIR
+    echo "---"
+    if test "$NO_RUNTIME_DOWNLOAD" = 1; then
+        echo "    * skipping runtime downloading"
+        return
+    fi
+    if type rsync >/dev/null 2>&1 ; then
+        echo "    * Downloading \"runtime files\" using rsync"
+        to=$DIR/vim7/runtime/.
+        if ! (set -x; rsync $RSYNC_OPT --exclude=dos -avz -c ${RUNTIMES_RSYNC_URL?}/.  $to ) ; then
+            echo 1>&2 "Error during rsync. Press Enter to continue"
+            read ANS
+        else
+            echo "ok, rsync completed"
+        fi
+    else
+        echo "Warning: missing utility 'rsync'"
+        echo "         runtime files will not be the most updated"
+        sleep 2
+    fi
+    echo "---"
 }
 
 SVN_WARN_ERRORS() { # $1-status code
@@ -151,7 +169,7 @@ SVN_WARN_ERRORS() { # $1-status code
 CHECK_SVN_LOCAL_MODS() {
     echo "    * checking for locally modified files ..."
     cd $DIR/vim7 || exit 1
-    MODS=`svn st | grep '^M'`
+    MODS=`svn st | grep '^M'|grep -v ' runtime/'|grep -v ' src/auto/'`
     if test "$MODS" = ""; then
         echo "No locally modified files"  
     else
@@ -210,8 +228,22 @@ DO_SVN() { # $1 - svn option. We might want to pass -N to check out
 
         SVN_WARN_ERRORS $?
     fi
+
+    DOWNLOAD_RUNTIME_FILES
 } 
 
+DOWNLOAD() {
+    case "$DOWNLOAD_METHOD" in
+    "cvs")
+        DO_CVS
+    ;;
+    "svn")
+        DO_SVN
+    ;;
+    *)
+        die "Error, unknown download method ($1), must be 'svn' or 'cvs'"
+    esac
+}
 
 HANDLE_ROOT_INSTALLATION_ERROR() {
     echo ""
@@ -367,6 +399,7 @@ INITIAL_DIALOG() { # ->$INTO_HOME, $ASK_ROOT
             echo "2) You do not know root password or you want to"
             echo "   install vim under your "'$'"HOME/bin directory"
             read ANS
+            # 3rd hidden answer (3) installs under $HOME/vim/bin
 
             case $ANS in 
             2) CONFIG_OPT="$CONFIG_OPT --prefix=$HOME"
@@ -378,11 +411,23 @@ INITIAL_DIALOG() { # ->$INTO_HOME, $ASK_ROOT
                     ASK_ROOT=0
                fi
             ;;
+            3) CONFIG_OPT="$CONFIG_OPT --prefix=$HOME/vim"
+               INTO_HOME=1
+            ;;
             *) echo "Try again"
                exit 20
             esac    
         fi
     esac
+
+    if ! type >/dev/null 2>/dev/null rsync; then
+        echo "***** Attention. Utility 'rsync' is not installed"
+        echo "                 The build will complete, but the versions of \"runtime files\""
+        echo "                 (docs, highlight rules, support files) will not be the latest."
+        echo "                 Consider installing rsync for to have latest \"runtime files\"."
+        echo "Press ENTER to continue"
+        read ANS
+    fi
 }
 
 
@@ -411,9 +456,10 @@ SCAN_ARGV() {
         ;;
         -x|-show-dir)
             ASSIGN_DIR # -> $DIR, $SRCTOP, $VIMSRC
-            echo $DIR
+            echo $DIR/vim7
             echo $LOG
             echo $SVN_URL
+            echo $RUNTIMES_RSYNC_URL
             exit
         ;;
         -y|-show-svn)
@@ -448,6 +494,25 @@ SCAN_ARGV() {
             CONFIG_OPT="$CONFIG_OPT --prefix=/usr/local ..."; echo "";
             echo "Will install to --prefix=/usr/local"
             shift
+        ;;
+        -cache)
+            CACHE_BASE=$2
+            shift 2
+            mkdir -p "$CACHE_BASE" || die Error
+        ;;
+        -rt|-runtime) # only download runtime files and exit
+            ASSIGN_DIR # -> $DIR, $SRCTOP, $VIMSRC
+            DOWNLOAD_RUNTIME_FILES
+            exit
+        ;;
+        -rt-dry|-runtime-dry) # only download runtime files and exit
+            ASSIGN_DIR # -> $DIR, $SRCTOP, $VIMSRC
+            RSYNC_OPT="-n"
+            DOWNLOAD_RUNTIME_FILES
+            exit
+        ;;
+        -nort)
+            NO_RUNTIME_RSYNC=1
         ;;
         *)
             echo 1>&2 "Error: bad argument: <$1>"
@@ -1255,3 +1320,6 @@ MAIN "$@"
 # 061019 lerner added '-clean' option
 # 061103 lerner added check for locally changed files, and prompt.
 # 070510 lerner SVN_URL changed
+# 070511 lerner added -cache option
+# 080220 lerner  added $VARTMP env.var
+# 080220 lerner  added rsync for runtime files, options -rt, -rt-dry, -nort
