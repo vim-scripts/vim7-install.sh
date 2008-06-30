@@ -21,12 +21,18 @@ USAGE=\
 Options: 
     any option beginning with -- is passed to configure.
     --help   print list of --options recognized by configure step.
-    -cvs     use cvs method to pull the sources. Default method is svn.
-    -svn     use svn method to download sources. This is defualt method.
-
+    -svnco     use "svn checkout" download sources. Default method is svnexport
+               "svn checkout" is slower than svnexport on first time, but
+               faster on repeated (incremental) rebuilds.
+    -svnexport [default] use "svn export" to download sources. svnexport is
+               faster than svnco on first build, but for repeated builds, svnco
+               can be faster,
+    -cvs     use cvs method to pull the sources. Default method is svnexport.
+             svc servers are sourceforge, they were not always stable in 2005-2006.
+             Because of instability of cvs server, default method was set to svn
     -noupdate    skip the source download/update phase
     -noinstall   skip the instllation phase
-    -home        install under $HOME/bin
+    -home,-user      install under user'"'"'s $HOME/bin
     -global,-glob    install into /usr/local  (user must be root or know root password)
     -cache DIR   alt. cache dir (defautl is /var/tmp/user$UID
     $VARTMP      base directory for checkout and build. Default is /var/tmp
@@ -35,14 +41,15 @@ Options:
 ';
 
 
-METHODS_LIST="cvs svn"
-DOWNLOAD_METHOD="svn"; # allowed value are 'svn' ('svn' is default), 'cvs'.
+METHODS_LIST="cvs svn svnexport"
+DEFAULT_METHOD="svnexport" # default method
+DOWNLOAD_METHOD=$DEFAULT_METHOD
 LOG=/tmp/`basename $0`.log
 prog=`basename $0`
 # before 2007-05-09, SVN_URL was https://svn.sourceforge.net/svnroot/vim/vim7
 # after  2007-05-09, SVN_URL is  https://vim.svn.sourceforge.net/svnroot/vim/branches/vim7.1 
-SVN_URL='https://vim.svn.sourceforge.net/svnroot/vim/branches/vim7.1'
-uid=`id|awk -F'[()=]' '{ print $2}'`
+SVN_URL='https://vim.svn.sourceforge.net/svnroot/vim/trunk'
+uid=`perl -e 'use POSIX; print geteuid()'`
 CACHE_BASE=${VARTMP:-/var/tmp}/user$uid
 RUNTIMES_RSYNC_URL="rsync://ftp.vim.org/Vim/runtime"
 # rsync --exclude=dos -n -avz -c rsync://ftp.vim.org/Vim/runtime/. runtime
@@ -54,20 +61,28 @@ die() { echo 1>&2 "$*"; exit 100; }
 dieUsage() { echo "${USAGE?}"; exit 100; }
 
 
+NOT() { if "$@"; then return 1; else return 0; fi; }
+
+
 ASSIGN_DIR() { # -> $DIR, $SRCTOP, $VIMSRC
     case "$DOWNLOAD_METHOD" in 
     "cvs")
-        DIR=$CACHE_BASE/vim7_from_cvs
+        DIR=$CACHE_BASE/vim7-from-cvs
         SRCTOP=$DIR/vim7    # $SRCTOP is used by patching
         VIMSRC=$SRCTOP/src  # $VIMSRC is used by patching
       ;;
     "svn")
-        DIR=$CACHE_BASE/vim7_from_svn
+        DIR=$CACHE_BASE/vim7-svncheckout
+        SRCTOP=$DIR/vim7    # $SRCTOP is used by patching
+        VIMSRC=$SRCTOP/src  # $VIMSRC is used by patching
+     ;;
+    "svnexport")
+        DIR=$CACHE_BASE/vim7-svnexport
         SRCTOP=$DIR/vim7    # $SRCTOP is used by patching
         VIMSRC=$SRCTOP/src  # $VIMSRC is used by patching
      ;;
     *)
-        die "Error, unknown download method ($1), must be 'svn' or 'cvs'"
+        die "Error, unknown download method ($DOWNLOAD_METHOD), must be 'svn' or 'svnexport' or 'cvs'"
     esac
     mkdir -p $DIR || die "ERROR creating directory"
     BLD=$DIR/vim7
@@ -145,11 +160,11 @@ DOWNLOAD_RUNTIME_FILES() { # $DIR
     if type rsync >/dev/null 2>&1 ; then
         echo "    * Downloading \"runtime files\" using rsync"
         to=$DIR/vim7/runtime/.
-        if ! (set -x; rsync $RSYNC_OPT --exclude=dos -avz -c ${RUNTIMES_RSYNC_URL?}/.  $to ) ; then
+        if (set -x; rsync $RSYNC_OPT --exclude=dos -avz -c ${RUNTIMES_RSYNC_URL?}/.  $to ) ; then
+            echo "ok, rsync completed"
+	else
             echo 1>&2 "Error during rsync. Press Enter to continue"
             read ANS
-        else
-            echo "ok, rsync completed"
         fi
     else
         echo "Warning: missing utility 'rsync'"
@@ -206,28 +221,41 @@ DO_SVN() { # $1 - svn option. We might want to pass -N to check out
     type svn >/dev/null 2>&1 || \
         die "Error: 'svn' utility is not installed. Please install svn and retry."
 
-    # if SVN_URL changed, we erase old checkout
-    OLD_URL=`svn info $DIR/vim7 2>/dev/null | awk '$1=="URL:" { print $2}'`
-    if test -d $DIR/vim7/.svn -a "$OLD_URL" != "$SVN_URL" ; then
-        echo "svn url changed, forcing full checkout."
-        echo "    old url: $OLD_URL"
-        echo "    new url: $SVN_URL"
-        sleep 2
-        rm -rf $DIR/vim7    # SVN_URL changed, force full checkout
-    fi
+    case $DOWNLOAD_METHOD in
+    "svnexport")
+        # every svn export is fresh download
+        rm -rf ${DIR?}/* ${DIR?}/.??*
+        if ( set -x; svn export --force $SVN_URL ${DIR?}/vim7 ); then
+            echo "ok, 'svn export' completed to ${DIR?}/vim7"
+        else
+            echo svn export reported errors, Press Enter to ignore or Ctrl-C to abort.
+            read ANS
+        fi
+      ;;
+    "svn")
+        # if SVN_URL changed, we erase old checkout
+        OLD_URL=`svn info $DIR/vim7 2>/dev/null | awk '$1=="URL:" { print $2}'`
+        if test -d $DIR/vim7/.svn -a "$OLD_URL" != "$SVN_URL" ; then
+            echo "svn url changed, forcing full checkout."
+            echo "    old url: $OLD_URL"
+            echo "    new url: $SVN_URL"
+            sleep 2
+            rm -rf $DIR/vim7    # SVN_URL changed, force full checkout
+        fi
 
-    if test -d $DIR/vim7/.svn ; then
-        echo "# previously downloaded source found."
-        CHECK_SVN_LOCAL_MODS
+        if test -d $DIR/vim7/.svn ; then
+            echo "# previously downloaded source found."
+            CHECK_SVN_LOCAL_MODS
 
-        ( set -x; cd $DIR/vim7 && svn up )
+            ( set -x; cd $DIR/vim7 && svn up )
 
-        SVN_WARN_ERRORS $?
-    else
-        ( set -x; cd $DIR && svn co $1 ${SVN_URL?} vim7 )
+            SVN_WARN_ERRORS $?
+        else
+            ( set -x; cd $DIR && svn co $1 ${SVN_URL?} vim7 )
 
-        SVN_WARN_ERRORS $?
-    fi
+            SVN_WARN_ERRORS $?
+        fi
+    esac
 
     DOWNLOAD_RUNTIME_FILES
 } 
@@ -240,8 +268,11 @@ DOWNLOAD() {
     "svn")
         DO_SVN
     ;;
+    "svnexport")
+        DO_SVN
+    ;;
     *)
-        die "Error, unknown download method ($1), must be 'svn' or 'cvs'"
+        die "Error, unknown download method ($1), must be 'svn' or 'svnexport' or 'cvs'"
     esac
 }
 
@@ -420,7 +451,7 @@ INITIAL_DIALOG() { # ->$INTO_HOME, $ASK_ROOT
         fi
     esac
 
-    if ! type >/dev/null 2>/dev/null rsync; then
+    if NOT type >/dev/null 2>/dev/null rsync; then
         echo "***** Attention. Utility 'rsync' is not installed"
         echo "                 The build will complete, but the versions of \"runtime files\""
         echo "                 (docs, highlight rules, support files) will not be the latest."
@@ -435,8 +466,6 @@ SCAN_ARGV() {
     ASK_ROOT=0
     IS_CYGWIN=0
     case `uname -s` in *CYGWIN*) IS_CYGWIN=1;; esac
-
-    uid=`id|awk -F'[()=]' '{ print $2}'`
 
     while test $# != 0 ; do # argv getops parse args
         case $1 in 
@@ -457,6 +486,12 @@ SCAN_ARGV() {
         -x|-show-dir)
             ASSIGN_DIR # -> $DIR, $SRCTOP, $VIMSRC
             echo $DIR/vim7
+            DOWNLOAD_METHOD="svn";
+            ASSIGN_DIR # -> $DIR, $SRCTOP, $VIMSRC
+            echo $DIR/vim7
+            DOWNLOAD_METHOD="cvs";
+            ASSIGN_DIR # -> $DIR, $SRCTOP, $VIMSRC
+            echo $DIR/vim7
             echo $LOG
             echo $SVN_URL
             echo $RUNTIMES_RSYNC_URL
@@ -471,8 +506,12 @@ SCAN_ARGV() {
             DOWNLOAD_METHOD="cvs"; shift;
             ASSIGN_DIR # -> $DIR, $SRCTOP, $VIMSRC
         ;;
-        -svn|--svn)
+        -svn|--svn|-svnco)
             DOWNLOAD_METHOD="svn"; shift;
+            ASSIGN_DIR # -> $DIR, $SRCTOP, $VIMSRC
+        ;;
+        -svnex*|-svnexport)
+            DOWNLOAD_METHOD="svnexport"; shift;
             ASSIGN_DIR # -> $DIR, $SRCTOP, $VIMSRC
         ;;
         clean|-clean|--clean)
@@ -485,7 +524,7 @@ SCAN_ARGV() {
         noinstall|-noinstall|--noinstall)
             SKIP_INSTALL=1; shift
         ;;
-        -home)
+        -home|-user)
             CONFIG_OPT="$CONFIG_OPT --prefix=$HOME"
             echo "Will install to --prefix=$HOME ..."; echo "";
             shift
@@ -656,7 +695,7 @@ SHOW_PATCHES() {
         for patch in $PATCH_LOCALS; do
             PATCH_LOG=$patch.patchlog
             PATCH_STATUS=$patch.patchstatus
-            if ! test -f $PATCH_STATUS ; then
+            if NOT test -f $PATCH_STATUS ; then
                 status="not applied"
             elif test "`cat $PATCH_STATUS`" = 0; then
                 status="applied,ok"
@@ -1323,3 +1362,4 @@ MAIN "$@"
 # 070511 lerner added -cache option
 # 080220 lerner  added $VARTMP env.var
 # 080220 lerner  added rsync for runtime files, options -rt, -rt-dry, -nort
+# 080318 lerner fixed $uid on Solaris
